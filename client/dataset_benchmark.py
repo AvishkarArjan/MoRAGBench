@@ -1,7 +1,17 @@
 #!/usr/bin/env python3
-"""Run MoRAGBench questions through one or both backends, streaming to JSONL."""
+"""MoRAGBench LLM dataset benchmark — run + summary in one script.
+
+Subcommands:
+  <default>      Run questions through one/both inference engines, streaming to JSONL.
+  summary        Print aggregate stats (avg/median/min/max) for one or more
+                 results_*.jsonl files as Rich tables, grouped by engine/backend.
+
+(Formerly two scripts: dataset_benchmark.py and results_summary.py.)
+"""
 import argparse
+import glob
 import json
+import statistics
 import sys
 import time
 from datetime import datetime
@@ -9,6 +19,7 @@ from datetime import datetime
 from datasets import load_dataset
 from rich.console import Console
 from rich.progress import track
+from rich.table import Table
 
 from helpers import (
     LITERT_MODEL,
@@ -29,6 +40,119 @@ DATASETS = {
 }
 
 ENGINES = ["litert", "onnx"]
+
+# ── summary mode (formerly client/results_summary.py) ──────────────────────────
+METRICS = [
+    ("ttft_ms", "TTFT (ms)"),
+    ("decode_speed_tps", "Decode (tok/s)"),
+    ("tbt_ms", "TBT (ms)"),
+    ("overall_ms", "Overall (ms)"),
+    ("tokens", "Tokens"),
+]
+
+
+def infer_backend(path):
+    base = path.rsplit("/", 1)[-1]
+    parts = base.split("_")
+    for i, p in enumerate(parts):
+        if p in ("gpu", "nnapi", "cpu") and i > 0 and parts[i - 1] in ("litert", "onnx"):
+            return p
+    return "unknown"
+
+
+def is_impossible(r):
+    for key in ("ttft_ms", "tbt_ms", "overall_ms"):
+        v = r.get(key)
+        if v is None:
+            return True
+        try:
+            if float(v) <= 0:
+                return True
+        except (TypeError, ValueError):
+            return True
+    try:
+        if int(r.get("tokens", 0)) <= 0:
+            return True
+        if float(r.get("decode_speed_tps", 0)) <= 0:
+            return True
+    except (TypeError, ValueError):
+        return True
+    return False
+
+
+def load_rows(paths):
+    rows = []
+    for p in paths:
+        inferred_backend = infer_backend(p)
+        try:
+            with open(p) as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    r = json.loads(line)
+                    r.setdefault("backend", inferred_backend)
+                    if is_impossible(r):
+                        continue
+                    rows.append(r)
+        except FileNotFoundError:
+            console.print(f"[red]not found: {p}[/]")
+    return rows
+
+
+def print_summary(rows, raw=False):
+    groups = {}
+    for r in rows:
+        key = (r.get("engine", "?"), r.get("backend") or "unknown")
+        groups.setdefault(key, []).append(r)
+
+    for (engine, backend), runs in sorted(groups.items(), key=lambda kv: str(kv[0])):
+        n = len(runs)
+        label = f"{engine} / {backend}"
+        table = Table(title=f"{label} ({n} samples)")
+        table.add_column("Metric", style="cyan")
+        table.add_column("Avg", justify="right")
+        table.add_column("Median", justify="right")
+        table.add_column("Min", justify="right")
+        table.add_column("Max", justify="right")
+        for key, name in METRICS:
+            vals = [float(r[key]) for r in runs if r.get(key) is not None and r[key] != ""]
+            if not vals:
+                continue
+            table.add_row(
+                name,
+                f"{statistics.mean(vals):.2f}",
+                f"{statistics.median(vals):.2f}",
+                f"{min(vals):.2f}",
+                f"{max(vals):.2f}",
+            )
+        table.add_row("Succeeded", f"{n}", "", "", "")
+        console.print(table)
+
+    if raw:
+        console.print("\n[bold]Raw rows:[/]")
+        for r in rows:
+            console.print(json.dumps(r))
+
+
+def summary_main(argv):
+    parser = argparse.ArgumentParser(
+        prog="dataset_benchmark.py summary",
+        description="Summarize MoRAGBench results_*.jsonl files.",
+    )
+    parser.add_argument("files", nargs="*", help="results_*.jsonl files (default: all)")
+    parser.add_argument("--raw", action="store_true", help="also print each sample's rows")
+    args = parser.parse_args(argv)
+
+    paths = args.files or sorted(glob.glob("results_*.jsonl"))
+    if not paths:
+        console.print("[red]No results_*.jsonl files found.[/]")
+        return
+    rows = load_rows(paths)
+    if not rows:
+        console.print("[red]No rows in the given files.[/]")
+        return
+    print_summary(rows, raw=args.raw)
 
 
 def load_questions(dataset_name, n):
@@ -153,4 +277,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) > 1 and sys.argv[1] == "summary":
+        summary_main(sys.argv[2:])
+    else:
+        main()
