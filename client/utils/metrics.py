@@ -153,7 +153,13 @@ def f1(predictions, references):
     references:  List[List[str]]
     """
     
-    def compute_f1(gold_toks, pred_toks):
+    def compute_f1(gold, pred):
+        # Tokenize on whitespace so overlap is measured word-by-word, not
+        # character-by-character (the latter drastically over-credits
+        # unrelated strings that merely share letters).
+        gold_toks = gold.split()
+        pred_toks = pred.split()
+
         common = collections.Counter(gold_toks) & collections.Counter(pred_toks)
         num_same = sum(common.values())
         if len(gold_toks) == 0 or len(pred_toks) == 0:
@@ -189,9 +195,9 @@ def get_task_metrics(
 
     assert len(preds) == len(refs), \
         "predictions and references must have the same length"
-        
+
     # Normalize metrics
-    predictions = [normalize_answer(p) for p in preds]
+    predictions = [normalize_answer(p) if p is not None else "" for p in preds]
     references = [[normalize_answer(r) for r in r_list] for r_list in refs]
 
 
@@ -224,10 +230,13 @@ def get_task_metrics(
         )
         
     # ---------- Dataset-level BLEU / ROUGE ----------
-    bleu_results = bleu.compute(
-        predictions=predictions,
-        references=references,
-    )
+    try:
+        bleu_results = bleu.compute(
+            predictions=predictions,
+            references=references,
+        )
+    except ZeroDivisionError:
+        bleu_results = {"bleu": 0.0}
 
     rouge_results = rouge.compute(
         predictions=predictions,
