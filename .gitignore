@@ -112,5 +112,6 @@ desktop.ini
 *.pem
 *.key
 
-# Benchmark result output (JSONL)
+# Benchmark result output (JSONL and run dirs)
 client/results_*.jsonl
+client/results_*/

@@ -18,7 +18,7 @@ from classes.common import TestType
 from helpers import (
     HTTP_BASE,
     PORT,
-    SERVER_BASE,
+    SDCARD_BASE,
     adb_forward,
     adb_pull,
     adb_push_files,
@@ -44,7 +44,7 @@ ANN_CONFIG_PATH = f"{ANN_DIR}/config.json"
 
 # Server dirs
 SERVER_RESULTS_DIR = "results"
-SERVER_ANN_DATASET_DIR = f"{SERVER_BASE}/{ANN_DIR}/ann_dataset"
+SERVER_ANN_DATASET_DIR = f"{SDCARD_BASE}/{ANN_DIR}/ann_dataset"
 
 # Client dir
 CLIENT_BASE = "."
@@ -155,19 +155,19 @@ def main(args):
         push_dir_files(
             device,
             f"{DOWNSTREAM_TASK_DIR}/{task_name}",
-            f"{SERVER_BASE}/{TASK_DIR}/downstream_task/{task_name}",
+            f"{SDCARD_BASE}/{TASK_DIR}/downstream_task/{task_name}",
         )
         push_dir_files(
             device,
             f"{LLM_DIR}/{llm_name}",
-            f"{SERVER_BASE}/{TASK_DIR}/llm/{llm_name}",
+            f"{SDCARD_BASE}/{TASK_DIR}/llm/{llm_name}",
         )
         push_dir_files(
             device,
             f"{EMBEDDING_DIR}/{embed_name}",
-            f"{SERVER_BASE}/{TASK_DIR}/embedding/{embed_name}",
+            f"{SDCARD_BASE}/{TASK_DIR}/embedding/{embed_name}",
         )
-        adb_push_files(device, f"{CLIENT_BASE}/{TASK_CONFIG_PATH}", f"{SERVER_BASE}/{TASK_CONFIG_PATH}")
+        adb_push_files(device, f"{CLIENT_BASE}/{TASK_CONFIG_PATH}", f"{SDCARD_BASE}/{TASK_CONFIG_PATH}")
     else:
         dataset_name = bench_model.ann_dataset.name.value
 
@@ -188,7 +188,7 @@ def main(args):
             f"{CLIENT_BASE}/{ANN_DATASET_DIR}/{dataset_name}",
             f"{SERVER_ANN_DATASET_DIR}/{dataset_name}",
         )
-        adb_push_files(device, f"{CLIENT_BASE}/{ANN_CONFIG_PATH}", f"{SERVER_BASE}/{ANN_CONFIG_PATH}")
+        adb_push_files(device, f"{CLIENT_BASE}/{ANN_CONFIG_PATH}", f"{SDCARD_BASE}/{ANN_CONFIG_PATH}")
         
 
     print("\n==== Starting Benchmark ====\n")
@@ -201,9 +201,9 @@ def main(args):
     # Pull results files
     print("\n==== Pulling Results from Server ====\n")
     if test_type == TestType.TASK:
-        results_phone_path = f"{SERVER_BASE}/{TASK_DIR}/{SERVER_RESULTS_DIR}/{bench_model.downstream_task.name.value}/."
+        results_phone_path = f"{SDCARD_BASE}/{TASK_DIR}/{SERVER_RESULTS_DIR}/{bench_model.downstream_task.name.value}/."
     else:
-        results_phone_path = f"{SERVER_BASE}/{ANN_DIR}/{SERVER_RESULTS_DIR}/{bench_model.ann_dataset.name.value}/."
+        results_phone_path = f"{SDCARD_BASE}/{ANN_DIR}/{SERVER_RESULTS_DIR}/{bench_model.ann_dataset.name.value}/."
 
     # Clean up old local results if not resuming
     if not args.resume and os.path.exists(args.output_path):
