@@ -174,17 +174,63 @@ def adb_push_files(device, local_path, destination_path):
 
 
 def adb_pull(device, phone_path, local_path):
-    run(adb_cmd(device, "pull", phone_path, local_path))
+    """Pull a file or directory from the device.
+
+    Falls back to the app's /file endpoint when `adb pull` fails. On Android 11+
+    the FUSE layer forces files the app writes into its external files dir to
+    mode 0660 app-owned; adb shell (a different uid) can then neither read nor
+    chmod them, so the only way to get results off the device is to have the
+    app stream them over the forwarded control port.
+    """
+    try:
+        run(adb_cmd(device, "pull", phone_path, local_path))
+        return
+    except RuntimeError:
+        pass
+    print("adb pull failed, falling back to HTTP /file endpoint.")
+    _http_fetch_recursive(device, phone_path, local_path)
+
+
+def _http_fetch_recursive(device, phone_path, local_path):
+    import os
+    import posixpath
+    import urllib.parse
+
+    rel = posixpath.relpath(phone_path.rstrip("/"), SDCARD_BASE)
+    if rel == ".":
+        rel = "."
+    os.makedirs(local_path, exist_ok=True)
+    entries = requests.get(
+        f"{HTTP_BASE}/file",
+        params={"path": rel},
+        timeout=60,
+    ).json()["entries"]
+    for name in entries:
+        child_phone = posixpath.join(phone_path.rstrip("/"), name)
+        child_local = os.path.join(local_path, name)
+        if os.path.isdir(child_local):
+            _http_fetch_recursive(device, child_phone, child_local)
+            continue
+        with open(child_local, "wb") as f:
+            f.write(
+                requests.get(
+                    f"{HTTP_BASE}/file",
+                    params={"path": posixpath.relpath(child_phone, SDCARD_BASE)},
+                    timeout=300,
+                ).content
+            )
 
 
 def push_dir_files(device, local_dir, remote_dir):
     """Push every file (non-recursive) from local_dir into remote_dir."""
     import os
-    remote_dir = remote_dir.rstrip("/") + "/"
+    remote_dir = remote_dir.rstrip("/")
     for name in os.listdir(local_dir):
         src = os.path.join(local_dir, name)
         if os.path.isfile(src):
-            adb_push_files(device, src, remote_dir)
+            # Full destination file path, not "dir/": some ROMs (ColorOS) fail
+            # with EISDIR when adb push targets a path ending in "/".
+            adb_push_files(device, src, f"{remote_dir}/{name}")
 
 
 # ── HTTP helpers ────────────────────────────────────────────────────────────────

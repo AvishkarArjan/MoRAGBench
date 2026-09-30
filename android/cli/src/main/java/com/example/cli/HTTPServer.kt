@@ -8,6 +8,8 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
+import java.io.FileInputStream
 
 class HttpServer(private val context: Context, port: Int = Constants.PORT): NanoHTTPD(port) {
     override fun serve(session: IHTTPSession): Response {
@@ -132,6 +134,7 @@ class HttpServer(private val context: Context, port: Int = Constants.PORT): Nano
                     )
                 }
                 "/generate" -> return handleGenerate(session)
+                "/file" -> return handleFile(session)
             }
             return newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "Not found")
         } catch (e: Throwable) {
@@ -139,6 +142,77 @@ class HttpServer(private val context: Context, port: Int = Constants.PORT): Nano
             j.put("error", e.message)
             return newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "application/json", j.toString())
         }
+    }
+
+    private fun handleFile(session: IHTTPSession): Response {
+        // The client normally retrieves results with `adb pull`, but on Android
+        // 11+ the FUSE layer forces every file this app writes into its
+        // external files dir to mode 0660 app-owned, and adb shell runs as a
+        // different uid -- so it can neither read nor chmod them. Serving the
+        // bytes over the already-forwarded control port is the only way to get
+        // results off such a device.
+        if (session.method != Method.GET) {
+            return newFixedLengthResponse(
+                Response.Status.METHOD_NOT_ALLOWED,
+                "text/plain",
+                "Use GET"
+            )
+        }
+
+        val requested = session.parameters["path"]?.firstOrNull()
+            ?: return newFixedLengthResponse(
+                Response.Status.BAD_REQUEST,
+                "text/plain",
+                "Missing path parameter"
+            )
+
+        val base = context.getExternalFilesDir(null)
+            ?: return newFixedLengthResponse(
+                Response.Status.INTERNAL_ERROR,
+                "text/plain",
+                "External files dir unavailable"
+            )
+        val basePath = base.canonicalPath
+        val target = File(base, requested).canonicalFile
+
+        // Guard against path traversal escaping the sandbox
+        if (!target.path.startsWith(basePath + File.separator)) {
+            return newFixedLengthResponse(
+                Response.Status.FORBIDDEN,
+                "text/plain",
+                "Illegal path outside sandbox"
+            )
+        }
+
+        if (target.isDirectory) {
+            val names = JSONArray()
+            target.listFiles()?.forEach { names.put(it.name) }
+            val resp = JSONObject()
+            resp.put("type", "dir")
+            resp.put("entries", names)
+            return newFixedLengthResponse(
+                Response.Status.OK,
+                "application/json",
+                resp.toString()
+            )
+        }
+
+        if (!target.isFile) {
+            return newFixedLengthResponse(
+                Response.Status.NOT_FOUND,
+                "text/plain",
+                "No such file"
+            )
+        }
+
+        val length = target.length()
+        val stream = FileInputStream(target)
+        return newFixedLengthResponse(
+            Response.Status.OK,
+            "application/octet-stream",
+            stream,
+            length
+        )
     }
 
     private fun handleGenerate(session: IHTTPSession): Response {
